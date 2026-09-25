@@ -28,6 +28,7 @@ import {
 } from '../src/store/store';
 import type { AppState } from '../src/store/store';
 import type { Pt } from '../src/model';
+import { DEFAULT_RULES } from '../src/rules/defaults';
 
 const snap = (): AppState => getState();
 
@@ -76,8 +77,10 @@ describe('store 响应性（useSyncExternalStore 依赖的引用语义）', () =
     expect(r1.extinguisherRadiusM).toBe(25);
     expect(r1.version).toBe(r0.version + 1);
     resetRules('office');
-    expect(snap().rules.office.extinguisherRadiusM).toBe(r0.extinguisherRadiusM);
-    expect(snap().rules.office.version).toBe(1);
+    // 恢复默认也记为一个新版本：限值回到默认值，但版本号只增不减（历史可溯）
+    const r2 = snap().rules.office;
+    expect(r2.extinguisherRadiusM).toBe(DEFAULT_RULES.office.extinguisherRadiusM);
+    expect(r2.version).toBe(r0.version + 2);
   });
 });
 

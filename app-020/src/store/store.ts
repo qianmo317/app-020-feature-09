@@ -10,9 +10,11 @@ import type {
   Room,
   RoomUsage,
   RuleSet,
+  RuleValues,
+  RuleVersion,
   ValidationResult,
 } from '../model';
-import { DEFAULT_RULES } from '../rules/defaults';
+import { DEFAULT_RULES, diffRuleFields, ruleValuesOf } from '../rules/defaults';
 import { nextCode, uid } from './id';
 import { polyAreaM2 } from '../lib/geometry';
 
@@ -22,9 +24,38 @@ export type AppState = {
   buildings: Building[];
   floors: Record<string, Floor>;
   rules: Record<BuildingKind, RuleSet>;
+  /** 规则版本历史：每次修改/恢复追加一条，最后一条对应当前生效版本 */
+  ruleHistory: Record<BuildingKind, RuleVersion[]>;
   /** 「您在此」标记（打印版疏散图），按楼层存 */
   marks: Record<string, Pt>;
 };
+
+const KIND_KEYS = Object.keys(DEFAULT_RULES) as BuildingKind[];
+
+/** 旧数据没有历史记录时，以当前规则为基线版本（之后的改动都能与它对照） */
+function seedRuleHistory(
+  rules: Record<BuildingKind, RuleSet>,
+  stored?: Partial<Record<BuildingKind, RuleVersion[]>>,
+): Record<BuildingKind, RuleVersion[]> {
+  const out = {} as Record<BuildingKind, RuleVersion[]>;
+  for (const k of KIND_KEYS) {
+    const list = stored?.[k];
+    if (Array.isArray(list) && list.length) {
+      out[k] = list;
+    } else {
+      out[k] = [
+        {
+          version: rules[k].version,
+          at: new Date().toISOString(),
+          note: '初始版本',
+          changedFields: [],
+          values: ruleValuesOf(rules[k]),
+        },
+      ];
+    }
+  }
+  return out;
+}
 
 function loadState(): AppState {
   try {
@@ -33,10 +64,12 @@ function loadState(): AppState {
       const s = JSON.parse(raw) as Partial<AppState>;
       // 缺失的节用默认值补齐（如旧版本数据没有 rules/marks），而不是整体丢弃用户数据
       if (s && Array.isArray(s.buildings) && s.floors) {
+        const rules = { ...structuredClone(DEFAULT_RULES), ...(s.rules ?? {}) };
         return {
           buildings: s.buildings,
           floors: s.floors,
-          rules: { ...structuredClone(DEFAULT_RULES), ...(s.rules ?? {}) },
+          rules,
+          ruleHistory: seedRuleHistory(rules, s.ruleHistory),
           marks: s.marks ?? {},
         };
       }
@@ -44,7 +77,8 @@ function loadState(): AppState {
   } catch {
     /* 损坏则重新开始 */
   }
-  return { buildings: [], floors: {}, rules: structuredClone(DEFAULT_RULES), marks: {} };
+  const rules = structuredClone(DEFAULT_RULES);
+  return { buildings: [], floors: {}, rules, ruleHistory: seedRuleHistory(rules), marks: {} };
 }
 
 let state: AppState = loadState();
@@ -64,11 +98,12 @@ function persist() {
 
 function setState(patch: (s: AppState) => void) {
   patch(state);
-  // 浅拷贝各容器：保证 s.buildings / s.floors / s.rules / s.marks 选择器拿到新引用
+  // 浅拷贝各容器：保证 s.buildings / s.floors / s.rules / s.ruleHistory / s.marks 选择器拿到新引用
   state = {
     buildings: [...state.buildings],
     floors: { ...state.floors },
     rules: { ...state.rules },
+    ruleHistory: { ...state.ruleHistory },
     marks: { ...state.marks },
   };
   persist();
@@ -285,18 +320,49 @@ export function setLastValidation(floorId: string, result: ValidationResult) {
 
 // ---------- 规则 ----------
 
+/** 应用一次规则变更：版本 +1、写入历史（改动字段自动 diff），保证「最后一条历史 = 当前版本」 */
+function commitRules(s: AppState, kind: BuildingKind, values: RuleValues, meta: { actor?: string; note?: string }) {
+  const r = s.rules[kind];
+  const next: RuleSet = { ...values, buildingKind: kind, version: r.version + 1 };
+  s.rules[kind] = next;
+  s.ruleHistory[kind] = [
+    ...(s.ruleHistory[kind] ?? []),
+    {
+      version: next.version,
+      at: new Date().toISOString(),
+      actor: meta.actor,
+      note: meta.note,
+      changedFields: diffRuleFields(ruleValuesOf(r), values),
+      values: ruleValuesOf(next),
+    },
+  ];
+}
+
 export function updateRules(kind: BuildingKind, patch: Partial<Omit<RuleSet, 'buildingKind' | 'version'>>) {
   setState((s) => {
-    const r = s.rules[kind];
-    s.rules[kind] = { ...r, ...patch, version: r.version + 1 };
+    commitRules(s, kind, { ...ruleValuesOf(s.rules[kind]), ...patch }, {});
   });
 }
 
+/** 恢复默认限值 —— 同样记为一个新版本（版本号只增不减，历史可溯） */
 export function resetRules(kind: BuildingKind) {
   setState((s) => {
-    s.rules[kind] = structuredClone(DEFAULT_RULES[kind]);
+    commitRules(s, kind, ruleValuesOf(DEFAULT_RULES[kind]), { note: '恢复默认值' });
   });
-  persist();
+}
+
+/**
+ * 把某个历史版本一键恢复为当前版本：恢复动作本身也记一个新版本（版本号继续 +1），
+ * 并记录操作人 —— 事后能查到「谁在什么时候把规则改回了哪一版」。
+ */
+export function restoreRuleVersion(kind: BuildingKind, targetVersion: number, actor: string): boolean {
+  const entry = (state.ruleHistory[kind] ?? []).find((e) => e.version === targetVersion);
+  if (!entry) return false;
+  const who = actor.trim() || '未署名';
+  setState((s) => {
+    commitRules(s, kind, ruleValuesOf(entry.values), { actor: who, note: `恢复自 v${targetVersion}` });
+  });
+  return true;
 }
 
 // ---------- 示例数据 ----------

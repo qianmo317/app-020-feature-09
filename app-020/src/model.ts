@@ -76,15 +76,32 @@ export type Building = {
   createdAt: string;
 };
 
-export type RuleSet = {
-  buildingKind: BuildingKind;
+/** 规则集中可对照的限值字段（历史版本按此快照，逐项对比） */
+export type RuleValues = {
   maxTravelDistanceM: number;
   deadEndDistanceM: number;
   extinguisherRadiusM: number;
   exitMinAreaM2: number; // 超过此面积需 ≥2 个安全出口
   exitMaxOccupants: number; // 超过此人数需 ≥2 个安全出口
   source: string; // 依据文号，报告中打印
+};
+
+export type RuleSet = RuleValues & {
+  buildingKind: BuildingKind;
   version: number; // 规则版本，修改即 +1，校验结果记录当时版本
+};
+
+/**
+ * 规则历史版本：每次修改 / 恢复默认 / 恢复旧版都追加一条，
+ * 当前生效版本 = 该类别历史的最后一条（版本号只增不减，恢复也算一版）。
+ */
+export type RuleVersion = {
+  version: number;
+  at: string; // ISO 时间
+  actor?: string; // 操作人（恢复旧版时填写，便于事后追溯「谁改回去了」）
+  note?: string; // 如「恢复自 v3」「恢复默认值」
+  changedFields: (keyof RuleValues)[]; // 相对上一版改动的字段
+  values: RuleValues;
 };
 
 export type ValidationSeverity = 'error' | 'warning';

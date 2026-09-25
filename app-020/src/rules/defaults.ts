@@ -1,4 +1,4 @@
-import type { BuildingKind, RuleSet } from '../model';
+import type { BuildingKind, RuleSet, RuleValues } from '../model';
 
 /**
  * 默认规则集（参考值，均标注依据，可在 /rules 页面按项目实际调整；修改后版本号 +1）。
@@ -69,3 +69,48 @@ export const CHECK_INTERVAL_DAYS: Record<string, number> = {
   exit: 180,
   sprinkler: 180,
 };
+
+/** 规则限值字段（顺序即对比表/表单的展示顺序） */
+export const RULE_FIELD_KEYS: (keyof RuleValues)[] = [
+  'maxTravelDistanceM',
+  'deadEndDistanceM',
+  'extinguisherRadiusM',
+  'exitMinAreaM2',
+  'exitMaxOccupants',
+  'source',
+];
+
+export const RULE_FIELD_LABELS: Record<keyof RuleValues, string> = {
+  maxTravelDistanceM: '疏散距离限值',
+  deadEndDistanceM: '袋形走道限值',
+  extinguisherRadiusM: '灭火器保护半径',
+  exitMinAreaM2: '需 2 出口的最小面积',
+  exitMaxOccupants: '需 2 出口的最小人数',
+  source: '依据文号',
+};
+
+export const RULE_FIELD_UNITS: Record<keyof RuleValues, string> = {
+  maxTravelDistanceM: 'm',
+  deadEndDistanceM: 'm',
+  extinguisherRadiusM: 'm',
+  exitMinAreaM2: '㎡',
+  exitMaxOccupants: '人',
+  source: '',
+};
+
+/** 从规则集中取出可对照的限值快照（历史版本存的就是这个） */
+export function ruleValuesOf(r: RuleValues): RuleValues {
+  return {
+    maxTravelDistanceM: r.maxTravelDistanceM,
+    deadEndDistanceM: r.deadEndDistanceM,
+    extinguisherRadiusM: r.extinguisherRadiusM,
+    exitMinAreaM2: r.exitMinAreaM2,
+    exitMaxOccupants: r.exitMaxOccupants,
+    source: r.source,
+  };
+}
+
+/** 两版限值的差异字段（按 RULE_FIELD_KEYS 顺序，用于历史记录「这次动了哪几项」） */
+export function diffRuleFields(a: RuleValues, b: RuleValues): (keyof RuleValues)[] {
+  return RULE_FIELD_KEYS.filter((k) => a[k] !== b[k]);
+}
