@@ -149,6 +149,38 @@ input, select {
 /* 规则页 */
 .ruletabs { display: flex; gap: 6px; margin: 12px 0; }
 .ruleform { max-width: 560px; }
+.opbar { margin: 8px 0; }
+
+/* 两版对照表：改动行/旧值/新值标色 */
+.diff-table { max-width: 720px; margin-top: 8px; }
+.diff-table td, .diff-table th { vertical-align: top; }
+.diff-table tr.changed td { background: #fff8ec; }
+.diff-table .oldval { color: var(--muted); text-decoration: line-through; text-decoration-color: #d8a25a; }
+.diff-table .newval { color: #b26a00; font-weight: 700; }
+.diff-table .arrow { width: 28px; text-align: center; color: var(--amber); font-weight: 700; }
+
+/* 对照楼层：双结论并排 */
+.cmpgrid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 8px 0; }
+.verdict-card { border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; font-size: 12px; }
+.verdict-card.pass { border-color: #9ecfa4; background: #f3faf4; }
+.verdict-card.fail { border-color: #e2a3a3; background: #fef5f5; }
+.vc-head { display: flex; justify-content: space-between; align-items: baseline; font-weight: 600; margin-bottom: 4px; }
+.verdict-card.pass .vc-head b { color: var(--green); }
+.verdict-card.fail .vc-head b { color: var(--red); }
+.vc-stats { display: grid; grid-template-columns: 1fr 1fr; gap: 2px 10px; color: var(--muted); margin-bottom: 4px; }
+.vc-items { margin: 4px 0; padding-left: 16px; }
+.vc-items li { margin: 2px 0; }
+.vc-items li.error b { color: var(--red); }
+.vc-items li.warning b { color: #b26a00; }
+
+/* 版本历史时间线 */
+.hist { list-style: none; margin: 8px 0 0; padding: 0; }
+.hist li { border-left: 3px solid var(--line); padding: 6px 0 6px 14px; margin-bottom: 6px; }
+.hist li.current { border-left-color: var(--blue); background: #f7faff; border-radius: 0 8px 8px 0; padding-left: 12px; }
+.hist-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.hist-head button { margin-left: auto; font-size: 12px; }
+.hist-note { margin-top: 2px; }
+.hist-vals { margin-top: 2px; font-size: 11px; }
 
 /* ---------- 打印页 ---------- */
 .printpage { background: #e9ebee; min-height: 100%; }

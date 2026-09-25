@@ -87,6 +87,28 @@ export type RuleSet = {
   version: number; // 规则版本，修改即 +1，校验结果记录当时版本
 };
 
+/** 参与逐项对照的五个数值限值字段 */
+export type RuleValueField =
+  | 'maxTravelDistanceM'
+  | 'deadEndDistanceM'
+  | 'extinguisherRadiusM'
+  | 'exitMinAreaM2'
+  | 'exitMaxOccupants';
+
+/** 规则新版本的产生方式 */
+export type RuleChangeReason = 'init' | 'edit' | 'restore' | 'reset';
+
+/** 一版规则的完整快照与溯源信息（版本链中的一项） */
+export type RuleVersionMeta = {
+  buildingKind: BuildingKind;
+  version: number;
+  rules: RuleSet; // 该版完整规则；恢复时据此重建
+  changedAt: string; // ISO 时间；内置初始版本为空串
+  author: string; // 操作人（谁改的 / 谁恢复的）
+  reason: RuleChangeReason;
+  note?: string; // 如「修改 疏散距离限值（40→30m）」「由 张三 恢复自 v1」
+};
+
 export type ValidationSeverity = 'error' | 'warning';
 
 export type ValidationItem = {

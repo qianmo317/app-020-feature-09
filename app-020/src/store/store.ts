@@ -10,9 +10,11 @@ import type {
   Room,
   RoomUsage,
   RuleSet,
+  RuleVersionMeta,
   ValidationResult,
 } from '../model';
 import { DEFAULT_RULES } from '../rules/defaults';
+import { rulesEqual } from '../rules/diff';
 import { nextCode, uid } from './id';
 import { polyAreaM2 } from '../lib/geometry';
 
@@ -22,9 +24,63 @@ export type AppState = {
   buildings: Building[];
   floors: Record<string, Floor>;
   rules: Record<BuildingKind, RuleSet>;
+  /** 各建筑类别规则的全量版本链（按 version 升序）；rules[k] 始终等于末项 */
+  ruleHistory: Record<BuildingKind, RuleVersionMeta[]>;
+  /** 当前操作人：改动/恢复规则时记入版本溯源 */
+  operator: string;
   /** 「您在此」标记（打印版疏散图），按楼层存 */
   marks: Record<string, Pt>;
 };
+
+/** 初始版本链：内置默认规则 v1（历史版本功能上线前的数据按此补齐） */
+function initialRuleHistory(): Record<BuildingKind, RuleVersionMeta[]> {
+  const kinds = Object.keys(DEFAULT_RULES) as BuildingKind[];
+  return Object.fromEntries(
+    kinds.map((k) => [
+      k,
+      [
+        {
+          buildingKind: k,
+          version: DEFAULT_RULES[k].version,
+          rules: structuredClone(DEFAULT_RULES[k]),
+          changedAt: '',
+          author: '',
+          reason: 'init',
+        },
+      ],
+    ]),
+  ) as Record<BuildingKind, RuleVersionMeta[]>;
+}
+
+/**
+ * 老数据迁移：旧版本只存当前规则、没有版本链。
+ * 以当前规则补一条历史，版本号保留（可能已是 v3），标注为版本链功能上线前的规则。
+ */
+function migrateHistory(
+  rules: Record<BuildingKind, RuleSet>,
+  stored: Partial<Record<BuildingKind, RuleVersionMeta[]>> | undefined,
+): Record<BuildingKind, RuleVersionMeta[]> {
+  const seed = initialRuleHistory();
+  for (const k of Object.keys(seed) as BuildingKind[]) {
+    const hist = stored?.[k];
+    if (Array.isArray(hist) && hist.length) {
+      seed[k] = hist;
+    } else if (rules[k].version > 1) {
+      seed[k] = [
+        {
+          buildingKind: k,
+          version: rules[k].version,
+          rules: structuredClone(rules[k]),
+          changedAt: '',
+          author: '',
+          reason: 'edit',
+          note: '版本链功能上线前已生效的规则（改动明细未留档）',
+        },
+      ];
+    }
+  }
+  return seed;
+}
 
 function loadState(): AppState {
   try {
@@ -33,10 +89,13 @@ function loadState(): AppState {
       const s = JSON.parse(raw) as Partial<AppState>;
       // 缺失的节用默认值补齐（如旧版本数据没有 rules/marks），而不是整体丢弃用户数据
       if (s && Array.isArray(s.buildings) && s.floors) {
+        const rules = { ...structuredClone(DEFAULT_RULES), ...(s.rules ?? {}) };
         return {
           buildings: s.buildings,
           floors: s.floors,
-          rules: { ...structuredClone(DEFAULT_RULES), ...(s.rules ?? {}) },
+          rules,
+          ruleHistory: migrateHistory(rules, s.ruleHistory),
+          operator: s.operator ?? '',
           marks: s.marks ?? {},
         };
       }
@@ -44,7 +103,14 @@ function loadState(): AppState {
   } catch {
     /* 损坏则重新开始 */
   }
-  return { buildings: [], floors: {}, rules: structuredClone(DEFAULT_RULES), marks: {} };
+  return {
+    buildings: [],
+    floors: {},
+    rules: structuredClone(DEFAULT_RULES),
+    ruleHistory: initialRuleHistory(),
+    operator: '',
+    marks: {},
+  };
 }
 
 let state: AppState = loadState();
@@ -64,11 +130,13 @@ function persist() {
 
 function setState(patch: (s: AppState) => void) {
   patch(state);
-  // 浅拷贝各容器：保证 s.buildings / s.floors / s.rules / s.marks 选择器拿到新引用
+  // 浅拷贝各容器：保证 s.buildings / s.floors / s.rules / s.ruleHistory / s.marks 选择器拿到新引用
   state = {
     buildings: [...state.buildings],
     floors: { ...state.floors },
     rules: { ...state.rules },
+    ruleHistory: { ...state.ruleHistory },
+    operator: state.operator,
     marks: { ...state.marks },
   };
   persist();
@@ -283,20 +351,131 @@ export function setLastValidation(floorId: string, result: ValidationResult) {
   });
 }
 
-// ---------- 规则 ----------
+// ---------- 规则（带版本链） ----------
 
-export function updateRules(kind: BuildingKind, patch: Partial<Omit<RuleSet, 'buildingKind' | 'version'>>) {
+function currentAuthor(s: AppState, author?: string): string {
+  return (author ?? s.operator).trim() || '未署名';
+}
+
+/**
+ * 修改规则并记一版：与当前版完全相同则不升版（返回 false）。
+ * 新条目记录时间、操作人与逐字段改动摘要。
+ */
+export function updateRules(
+  kind: BuildingKind,
+  patch: Partial<Omit<RuleSet, 'buildingKind' | 'version'>>,
+  author?: string,
+): boolean {
+  let created = false;
   setState((s) => {
-    const r = s.rules[kind];
-    s.rules[kind] = { ...r, ...patch, version: r.version + 1 };
+    const cur = s.rules[kind];
+    const next: RuleSet = { ...cur, ...patch, buildingKind: kind };
+    if (rulesEqual(next, cur)) return;
+    next.version = cur.version + 1;
+    const changes = [
+      ...(['maxTravelDistanceM', 'deadEndDistanceM', 'extinguisherRadiusM', 'exitMinAreaM2', 'exitMaxOccupants'] as const)
+        .filter((f) => cur[f] !== next[f])
+        .map((f) => {
+          const label = {
+            maxTravelDistanceM: '疏散距离限值',
+            deadEndDistanceM: '袋形走道限值',
+            extinguisherRadiusM: '灭火器保护半径',
+            exitMinAreaM2: '需 2 个出口的最小面积',
+            exitMaxOccupants: '需 2 个出口的最大人数',
+          }[f];
+          const unit = {
+            maxTravelDistanceM: 'm',
+            deadEndDistanceM: 'm',
+            extinguisherRadiusM: 'm',
+            exitMinAreaM2: '㎡',
+            exitMaxOccupants: '人',
+          }[f];
+          return `修改 ${label}（${cur[f]}→${next[f]}${unit}）`;
+        }),
+      ...(cur.source !== next.source ? [`修改依据文号（${cur.source || '空'}→${next.source || '空'}）`] : []),
+    ];
+    s.rules[kind] = next;
+    s.ruleHistory[kind] = [
+      ...s.ruleHistory[kind],
+      {
+        buildingKind: kind,
+        version: next.version,
+        rules: structuredClone(next),
+        changedAt: new Date().toISOString(),
+        author: currentAuthor(s, author),
+        reason: 'edit',
+        note: changes.join('；'),
+      },
+    ];
+    created = true;
+  });
+  return created;
+}
+
+/**
+ * 一键恢复某历史版本：以该版限值作为当前版，但版本号继续 +1（不回退），
+ * 并记录恢复人与来源版本，事后可查「谁在何时把哪一版恢复了」。
+ * 与当前版完全相同则不升版（返回 false）。
+ */
+export function restoreRules(kind: BuildingKind, fromVersion: number, author?: string): boolean {
+  let done = false;
+  setState((s) => {
+    const src = s.ruleHistory[kind].find((m) => m.version === fromVersion);
+    if (!src) return;
+    const cur = s.rules[kind];
+    if (rulesEqual(src.rules, cur)) return;
+    const who = currentAuthor(s, author);
+    const next: RuleSet = { ...structuredClone(src.rules), version: cur.version + 1 };
+    s.rules[kind] = next;
+    s.ruleHistory[kind] = [
+      ...s.ruleHistory[kind],
+      {
+        buildingKind: kind,
+        version: next.version,
+        rules: structuredClone(next),
+        changedAt: new Date().toISOString(),
+        author: who,
+        reason: 'restore',
+        note: `${who} 从 v${src.version} 恢复`,
+      },
+    ];
+    done = true;
+  });
+  return done;
+}
+
+/**
+ * 恢复内置默认值：同样视为一次规则变更，版本号 +1 并留档，
+ * 而不是把版本号抹回 1（历史版本不可丢失）。
+ */
+export function resetRules(kind: BuildingKind, author?: string) {
+  setState((s) => {
+    const cur = s.rules[kind];
+    const def = DEFAULT_RULES[kind];
+    const who = currentAuthor(s, author);
+    const next: RuleSet = { ...structuredClone(def), version: cur.version + 1 };
+    if (rulesEqual(next, cur)) return;
+    s.rules[kind] = next;
+    s.ruleHistory[kind] = [
+      ...s.ruleHistory[kind],
+      {
+        buildingKind: kind,
+        version: next.version,
+        rules: structuredClone(next),
+        changedAt: new Date().toISOString(),
+        author: who,
+        reason: 'reset',
+        note: `${who} 恢复为内置默认值`,
+      },
+    ];
   });
 }
 
-export function resetRules(kind: BuildingKind) {
+/** 设置当前操作人（随状态持久化，后续规则改动自动带上） */
+export function setOperator(name: string) {
   setState((s) => {
-    s.rules[kind] = structuredClone(DEFAULT_RULES[kind]);
+    s.operator = name;
   });
-  persist();
 }
 
 // ---------- 示例数据 ----------

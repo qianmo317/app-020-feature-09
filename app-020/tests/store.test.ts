@@ -75,9 +75,14 @@ describe('store 响应性（useSyncExternalStore 依赖的引用语义）', () =
     expect(r1).not.toBe(r0);
     expect(r1.extinguisherRadiusM).toBe(25);
     expect(r1.version).toBe(r0.version + 1);
+    // 恢复默认同样记一版（版本号继续 +1，不抹回 1），旧版本保留在版本链里
     resetRules('office');
     expect(snap().rules.office.extinguisherRadiusM).toBe(r0.extinguisherRadiusM);
-    expect(snap().rules.office.version).toBe(1);
+    expect(snap().rules.office.version).toBe(r0.version + 2);
+    const hist = snap().ruleHistory.office;
+    expect(hist.map((m) => m.version)).toEqual([r0.version, r0.version + 1, r0.version + 2]);
+    expect(hist[hist.length - 1].reason).toBe('reset');
+    expect(hist[hist.length - 1].rules.extinguisherRadiusM).toBe(r0.extinguisherRadiusM);
   });
 });
 
